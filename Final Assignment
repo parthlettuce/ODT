@@ -1,0 +1,79 @@
+import time
+from machine import Pin
+from hid_services import Keyboard
+
+class Device:
+    def __init__(self):
+        # roller switch pins, using pull-up resistors so pressed = 0
+        self.pin_forward = Pin(5, Pin.IN, Pin.PULL_UP)   # W
+        self.pin_left = Pin(18, Pin.IN, Pin.PULL_UP)     # A
+        self.pin_reverse = Pin(23, Pin.IN, Pin.PULL_UP)  # S
+        self.pin_right = Pin(19, Pin.IN, Pin.PULL_UP)    # D
+
+        self.keyboard = Keyboard("Keyboard")
+        self.keyboard.set_state_change_callback(self.keyboard_state_callback)
+        self.keyboard.start()
+
+        self.last_keys = []       # to remember previous key state
+        self.spacebar_sent = False  # to avoid spam when W + S are pressed
+
+    def keyboard_state_callback(self):
+        # just to debug bluetooth status if needed
+        state = self.keyboard.get_state()
+        if state == Keyboard.DEVICE_CONNECTED:
+            print("Keyboard connected")
+        elif state == Keyboard.DEVICE_ADVERTISING:
+            print("Keyboard advertising...")
+        elif state == Keyboard.DEVICE_IDLE:
+            print("Keyboard idle")
+
+    def start(self):
+        while True:
+            state = self.keyboard.get_state()
+
+            if state == Keyboard.DEVICE_CONNECTED:
+                # because of PULL_UP logic, button press = 0
+                forward = not self.pin_forward.value()
+                left = not self.pin_left.value()
+                reverse = not self.pin_reverse.value()
+                right = not self.pin_right.value()
+
+                keys = []
+
+                if forward:
+                    keys.append(0x1A)  # W
+                if left:
+                    keys.append(0x04)  # A
+                if reverse:
+                    keys.append(0x16)  # S
+                if right:
+                    keys.append(0x07)  # D
+
+                # if both W and S pressed together, send spacebar once
+                if forward and reverse:
+                    if not self.spacebar_sent:
+                        keys = [0x2C]  # spacebar key
+                        self.spacebar_sent = True
+                elif not forward and not reverse and self.spacebar_sent:
+                    self.spacebar_sent = False  # reset so it works next time
+
+                # only send key report if it changed from last time
+                if keys != self.last_keys:
+                    self.keyboard.set_keys(*keys)
+                    self.keyboard.notify_hid_report()
+                    print("Sent keys:", keys)
+                    self.last_keys = keys
+
+                time.sleep_ms(20)
+
+            elif state == Keyboard.DEVICE_IDLE:
+                self.keyboard.start_advertising()
+                for _ in range(10):
+                    if self.keyboard.get_state() != Keyboard.DEVICE_ADVERTISING:
+                        break
+                    time.sleep(3)
+                self.keyboard.stop_advertising()
+
+if __name__ == "__main__":
+    d = Device()
+    d.start()
